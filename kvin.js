@@ -631,6 +631,11 @@ KVIN.prototype.isPrimitiveLike = function isPrimitiveLike (o, seen) {
   if (typeof o === 'number')
     return Number.isFinite(o);
 
+  /* Code below here is disabled because the raw: representation does not make the seen: list, which in
+   * turn causes the object graph to be incorrect if the object is use more than once. 
+   */
+  return false;
+
   if (typeof o !== 'object')
     return false;
 

@@ -2,7 +2,7 @@
 
 const kvin = require('../kvin');
 const x = {};
-const a = [ {v:1, x}, {v:1, x} ];
+const a = [ {v:{}, x}, {v:{}, x} ];
 const mA = kvin.marshal(a);
 const uA = kvin.unmarshal(mA);
 
@@ -12,8 +12,14 @@ if (uA[0] === uA[1])
   process.exit(1);
 }
 
-if (uA[0].x === uA[1].x)
+if (uA[0].v === uA[1].v)
 {
-  console.error('Objects properties should be identical but not the same');
+  console.error('Objects properties v should be identical but not the same');
+  process.exit(1);
+}
+
+if (uA[0].x !== uA[1].x)
+{
+  console.error('Objects properties x should be the same');
   process.exit(1);
 }
