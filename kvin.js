@@ -214,6 +214,9 @@ KVIN.prototype.userCtors = {}; /**< name: implementation for user-defined constr
  *  @param      position        A string respresenting our position within
  *                              the graph. Used only for error messages.
  *  @returns    the value encoded by po
+ *
+ *  @note   Things which prepare does not put in the seen list: numbers, bigints, undefined and anything
+ *          which isPrimitiveLike()
  */
 KVIN.prototype.unprepare = function unprepare (seen, po, position) {
   switch (typeof po) {
@@ -289,14 +292,10 @@ KVIN.prototype.unprepare = function unprepare (seen, po, position) {
   }
   if (po.hasOwnProperty('symbol'))
     return unprepare$symbol(seen, po);
-
-  /* Promise resolutions/rejections are prepared after settling when using marshalAsync, then
-   * synthesized during unmarshal.
-   */
   if (po.hasOwnProperty('resolve'))
-    return Promise.resolve(this.unprepare(seen, po.resolve, position));
+    return this.unprepare$Promise(seen, po, 'resolve', position);
   if (po.hasOwnProperty('reject'))
-    return Promise.reject(this.unprepare(seen, po.reject, position));
+    return this.unprepare$Promise(seen, po, 'reject', position);
 
   if (po.hasOwnProperty('seen')) {
     if (!seen.hasOwnProperty(po.seen)) {
@@ -419,6 +418,28 @@ function unprepare$symbol(seen, po)
   const symbol = Symbol(po.symbol);
   seen.push(symbol);
   return symbol;
+}
+
+/* Promise resolutions/rejections are prepared after settling when using marshalAsync, then
+ * synthesized during unmarshal.
+ *
+ * @param {Array}   seen       list of previously-seen values
+ * @param {Object}  po         a prepared object with the 'how' property holding a prepared object which
+ *                             represents the promise outcome
+ * @param {string}  how        the type of outcome, 'resolve' or 'reject'
+ * @param {string}  position   see unprepare()
+ * @returns a settled {Promise}
+ */
+KVIN.prototype.unprepare$Promise = function unprepare$Promise(seen, po, how, position)
+{
+  var pr = {};
+  pr.promise = new Promise((resolve, reject) => {
+    pr.resolve = resolve;
+    pr.reject  = reject;
+  });
+  pr[how](this.unprepare([/* avoid seen memo */], po[how], position + '.' + how));
+  seen.push(pr.promise);
+  return pr.promise;
 }
 
 function unprepare$bigint(arg) {
@@ -642,7 +663,7 @@ KVIN.prototype.isPrimitiveLike = function isPrimitiveLike (o, seen) {
 /**
  * Serialize an instance of Error, preserving standard-ish non-enumerable properties
  */
-function prepare$Error(o)
+KVIN.prototype.prepare$Error = function prepare$Error(seen, o, where)
 {
   let ret = {
     ctr: 'Error',
@@ -650,13 +671,16 @@ function prepare$Error(o)
     arg: o.message
   };
 
-  for (let prop of ['code', 'stack', 'lineNumber', 'fileName'])
+  for (let prop of ['code', 'stack', 'lineNumber', 'fileName', 'columnNumber'])
     if (o.hasOwnProperty(prop))
       ret.ps[prop] = o[prop];
   for (let prop in o)
     if (o.hasOwnProperty(prop))
       ret.ps[prop] = o[prop];
+  if (o.cause)
+    ret.ps[prop] = this.prepare(seen, o.cause, where + '.cause');
 
+  seen.push(ret);
   return ret;
 }
 
@@ -720,7 +744,7 @@ KVIN.prototype.prepare =  function prepare (seen, o, where) {
 
   if (o instanceof Error || o instanceof this.standardObjects.Error) {
     /* special-case Error to get non-enumerable properties */
-    return prepare$Error(o);
+    return this.prepare$Error(seen, o, where);
   }
 
   if (typeof o.constructor === 'undefined') {
