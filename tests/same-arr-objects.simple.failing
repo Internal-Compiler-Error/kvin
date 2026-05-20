@@ -5,7 +5,7 @@
  * @author      Wes Garland, wes@kingsds.network
  * @date        July 2021
  *
- * @note	This test is known to fail, see issue 8
+ * @note        This test is known to fail, see issue 8
  */
 'use strict';
 
@@ -14,6 +14,10 @@ const kvin = require('../kvin');
 const x = {a:123};
 const a = [x,x,{a:123},x,x];
 const A = kvin.parse(kvin.serialize(a));
+
+console.log(A);
+console.log(A.map(el => el === A[4]));
+debugger;
 
 if (A[2] === A[0])
   throw new Error('A[2] should not === A[0]');

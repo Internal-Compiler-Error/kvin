@@ -518,7 +518,8 @@ KVIN.prototype.unprepare$Array = function unprepare$Array (seen, po, position) {
  *  The isl8 (islands) encoding is almost the same, except that it encodes only
  *  sequences of mostly-non-zero sections of the string.
  */
-KVIN.prototype.unprepare$ArrayBuffer8 = function unprepare$ArrayBuffer8 (seen, po, position) {
+KVIN.prototype.unprepare$ArrayBuffer8 = function unprepare$ArrayBuffer8 (seen, po, _position)
+{
   let i8
   let bytes
   let constructor;
@@ -567,7 +568,8 @@ KVIN.prototype.unprepare$ArrayBuffer8 = function unprepare$ArrayBuffer8 (seen, p
  *  The isl16 (islands) encoding is almost the same, except that it encodes only
  *  sequences of mostly-non-zero sections of the string.
  */
- KVIN.prototype.unprepare$ArrayBuffer16 = function unprepare$ArrayBuffer16 (seen, po, position) {
+KVIN.prototype.unprepare$ArrayBuffer16 = function unprepare$ArrayBuffer16 (seen, po, _position)
+{
   let i16, i8, words
   let bytes
   let constructor;
@@ -678,7 +680,7 @@ KVIN.prototype.prepare$Error = function prepare$Error(seen, o, where)
     if (o.hasOwnProperty(prop))
       ret.ps[prop] = o[prop];
   if (o.cause)
-    ret.ps[prop] = this.prepare(seen, o.cause, where + '.cause');
+    ret.ps.cause = this.prepare(seen, o.cause, where + '.cause');
 
   seen.push(ret);
   return ret;
@@ -996,13 +998,13 @@ KVIN.prototype.prepare$ArrayBuffer16 = function prepare$ArrayBuffer16 (o) {
   } else {
     /* String looks zero-busy: represent via islands of mostly non-zero (sparse string). */
     // let re = /([^\u0000]+/g
-    let re = /([^\u0000]+(.{0,3}([^\u0000]|$))*)+/g
+    let re = /([^\u0000]+(.{0,3}([^\u0000]|$))*)+/g // eslint-disable-line no-control-regex
     let island
 
     ret.isl16 = []
     ret.len = o.byteLength
     while ((island = re.exec(s))) {
-      ret.isl16.push({0: island[0].replace(/\u0000*$/, ''), '@': island.index})
+      ret.isl16.push({0: island[0].replace(/\u0000*$/, ''), '@': island.index}) // eslint-disable-line no-control-regex
     }
   }
   if ((2 * nWords) !== o.byteLength) {
@@ -1053,7 +1055,7 @@ KVIN.prototype.prepare$ArrayBuffer8 = function prepare$ArrayBuffer8 (o) {
       const isl8 = [];
       let island;
       while ((island = re.exec(s)))
-        isl8.push({0: island[0].replace(/\u0000*$/, ''), '@': island.index});
+        isl8.push({0: island[0].replace(/\u0000*$/, ''), '@': island.index}); // eslint-disable-line no-control-regex
 
       ret.isl8 = isl8;
       ret.len = o.byteLength;
@@ -1170,7 +1172,7 @@ function prepare$number (n) {
 }
 
 /* Store primitives and sort-of-primitives (like object literals) directly */
-function prepare$primitive (primitive, where) {
+function prepare$primitive (primitive, _where) {
   switch (typeof po) {
     case 'boolean':
     case 'number': /* not all cases, see prepare$number */
@@ -1180,7 +1182,7 @@ function prepare$primitive (primitive, where) {
   return { raw: primitive };
 }
 
-function prepare$undefined (o) {
+function prepare$undefined (_o) {
   return { undefined: true }
 }
 
