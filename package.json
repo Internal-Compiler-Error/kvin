@@ -19,9 +19,11 @@
   "license": "MIT",
   "author": "Wes Garland <wes@distributive.network>",
   "main": "kvin.js",
+  "types": "kvin.d.ts",
   "files": [
     "LICENSE",
     "kvin.js",
+    "kvin.d.ts",
     "tests",
     "failing-tests",
     "browser-tests"
@@ -29,7 +31,8 @@
   "scripts": {
     "postpublish": "npm-hooks/postpublish",
     "test": "peter -J kvin-junit.xml tests; node_modules/peter/ci/check-for-failures kvin-junit.xml",
-    "prepublishOnly": "npm-hooks/prepublish"
+    "prepublishOnly": "npm-hooks/prepublish",
+    "typecheck": "tsc -p ."
   },
   "devDependencies": {
     "peter": "^2.4.7",
