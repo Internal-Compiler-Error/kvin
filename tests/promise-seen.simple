@@ -1,0 +1,56 @@
+#! /usr/bin/env node
+
+const assert = require('assert');
+const util = require('util');
+const KVIN = new (require('..').KVIN)();
+var console = new (require('console').Console)({
+  stdout: process.stdout,
+  stderr: process.stder,
+  inspectOptions: {
+    depth:           Infinity,
+    maxStringLength: Infinity,
+    maxArrayLength:  Infinity,
+    showHidden:      true,
+    colors:          true,
+  },
+});
+
+//Object.prototype[util.inspect.custom] = function() { return util.inspect(this, false, null, true) };
+
+/* const p = Promise.resolve('foo');
+ * marshalAsync({ x: { p }, y: { p } });
+ *
+ * Inside marshallSync, we have
+ *
+ * {                 seen[0]
+ *   x: {            seen[1]
+ *        p          seen[2]
+ *      },
+ *   y: {            seen[3]
+ *        p          seen[2]
+ *      }
+ * }
+ *
+ * and seen[2] === seen.promises[0];
+ */
+async function main()
+{
+  const p = Promise.resolve('one');
+//  const o = { x: { p }, y: { p } };
+  const o = { b: {}, x: { p }, a:{ b: { p } }, y: { p } };
+  const m = await KVIN.marshalAsync(o);
+  const O = KVIN.unmarshal(m);
+
+  assert(o.x.p === o.y.p);
+
+  console.log('original:', o);
+  console.log('marshalled:', m);
+  console.log('serialized:', JSON.stringify(m));
+  console.log('deserialized:', O);
+
+  debugger;
+  assert(O.x.p === O.y.p);
+
+}
+main();
+

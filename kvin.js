@@ -6,7 +6,7 @@
  *                                      - Sparse arrays
  *                                      - Arrays with enumerable properties
  *                                      - Object graphs with cycles
- *                                      - Boxed primitives (excluding Symbol)
+ *                                      - Boxed primitives
  *                                      - Functions (including enumerable properties, global scope)
  *                                      - Regular Expressions
  *                                      - undefined
@@ -48,7 +48,7 @@
   var module;
   let moduleSystemType;
   let realModule = module;
-  
+
   if (typeof __webpack_require__ !== 'undefined')
     moduleSystemType = 'webpack';
   else if (typeof module !== 'undefined' && typeof module.declare !== 'undefined')
@@ -85,12 +85,12 @@
     };
   }
 /* Now initialize the module by invoking module.declare per CommonJS Modules/2.0-draft8 */
-  
+
 /* eslint-disable indent */ module.declare([], function (require, exports, module) {
 
-/** 
+/**
  * @constructor to create an alternate KVIN context. This allows us to recogonize instance of
- *              the standard classes from a different JS context or have different tuning parameters.   
+ *              the standard classes from a different JS context or have different tuning parameters.
  * @param ctors list or object of standard constructors
  */
 function KVIN(ctors)
@@ -104,7 +104,7 @@ function KVIN(ctors)
   }
 
   this.ctors = [].concat(KVIN.prototype.ctors);
-  
+
   if (!ctors)
     return;
 
@@ -128,7 +128,7 @@ function KVIN(ctors)
     {
       for (let i=0; i < this.ctors.length; i++)
       {
-        let [ name, ctor ] = entry; 
+        let [ name, ctor ] = entry;
         if (!ctor)
           continue;
         if (this.ctors[i].name === name)
@@ -161,7 +161,9 @@ KVIN.prototype.scanArrayThreshold = 8
 /** Maxmimum number of arguments we can pass to a function in this engine.
  * @todo this needs to be detected at startup based on environment
  */
-const _vm_fun_maxargs = 30000;
+KVIN.prototype.maxFunArgs = 30000;
+/** Maximumum number of times we will repeat a re-match instead of unbounded */
+KVIN.prototype.maxReRepeat = 5000;
 
 const littleEndian = (function () {
   let ui16 = new Uint16Array(1)
@@ -170,10 +172,8 @@ const littleEndian = (function () {
   ui16[0] = 0xffef
   ui8 = new Uint8Array(ui16.buffer, ui16.byteOffset, ui16.byteLength)
 
-  if (ui8[0] === 0x0ff) {
-    console.error('KVIN: Detected big-endian platform')
-    return false
-  }
+  if (ui8[0] === 0x0ff)
+    throw new Error('KVIN: Detected big-endian platform');
 
   return true
 })()
@@ -200,6 +200,7 @@ KVIN.prototype.ctors = [
   Promise,
   typeof URL !== 'undefined' ? URL : undefined, /* not part of ES => feature-test */
   Date,
+  Set,
 ];
 
 KVIN.prototype.userCtors = {}; /**< name: implementation for user-defined constructors that are not props of global */
@@ -213,6 +214,9 @@ KVIN.prototype.userCtors = {}; /**< name: implementation for user-defined constr
  *  @param      position        A string respresenting our position within
  *                              the graph. Used only for error messages.
  *  @returns    the value encoded by po
+ *
+ *  @note   Things which prepare does not put in the seen list: numbers, bigints, undefined and anything
+ *          which isPrimitiveLike()
  */
 KVIN.prototype.unprepare = function unprepare (seen, po, position) {
   switch (typeof po) {
@@ -278,19 +282,20 @@ KVIN.prototype.unprepare = function unprepare (seen, po, position) {
   if (po.hasOwnProperty('ctr')) {
     return this.unprepare$object(seen, po, position)
   }
+  if (po.hasOwnProperty('set'))
+    return this.unprepare$Set(seen, po, position);
   if (po.hasOwnProperty('json')) {
     return JSON.parse(po.json)
   }
   if (po.hasOwnProperty('undefined')) {
     return undefined
   }
-
-  if (Object.hasOwnProperty.call(po, 'resolve')) {
-    // Unprepare a Promise by assuming po.resolve is a marshalled value.
-    const promise = Promise.resolve(this.unmarshal(po.resolve));
-    seen.push(promise);
-    return promise;
-  }
+  if (po.hasOwnProperty('symbol'))
+    return unprepare$symbol(seen, po);
+  if (po.hasOwnProperty('resolve'))
+    return this.unprepare$Promise(seen, po, 'resolve', position);
+  if (po.hasOwnProperty('reject'))
+    return this.unprepare$Promise(seen, po, 'reject', position);
 
   if (po.hasOwnProperty('seen')) {
     if (!seen.hasOwnProperty(po.seen)) {
@@ -298,6 +303,14 @@ KVIN.prototype.unprepare = function unprepare (seen, po, position) {
     }
     return seen[po.seen]
   }
+
+  /* KVIN 1.2.18 and older can bury marshaled objects inside marshaled objects. */
+  if (po.hasOwnProperty('_serializeVerId'))
+  {
+    seen.push(po);
+    return this.unmarshal(po);
+  }
+
   throw new TypeError('Invalid preparation formula at ' + position)
 }
 
@@ -305,18 +318,20 @@ KVIN.prototype.unprepare$object = function unprepare$object (seen, po, position)
   let o
   let constructor;
 
-  function construct(constructor, args) {
-    function fun() {
-      return constructor.apply(this, args);
+  function construct(thisCtor, args)
+  {
+    function fun()
+    {
+      return thisCtor.apply(this, args);
     }
-    fun.prototype = constructor.prototype;
+    fun.prototype = thisCtor.prototype;
     return new fun();
   }
-  
+
   if (typeof po.ctr === 'string' && !po.ctr.match(/^[1-9][0-9]*$/)) {
     if (this.userCtors.hasOwnProperty(po.ctr))
       constructor = this.userCtors[po.ctr];
-    else 
+    else
       constructor = eval(po.ctr) /* pre-validated! */ // eslint-disable-line
   } else {
     constructor = this.ctors[po.ctr]
@@ -335,7 +350,7 @@ KVIN.prototype.unprepare$object = function unprepare$object (seen, po, position)
     delete o.lineNumber;
     delete o.fileName;
   }
-  
+
   seen.push(o)
 
   if (po.hasOwnProperty('ps')) {
@@ -374,7 +389,7 @@ KVIN.prototype.unprepare$function = function unprepare$function (seen, po, posit
 }
 
 KVIN.prototype.unprepare$Map = function unprepare$Map (seen, po, position) {
-  
+
   let m = new Map();
 
   seen.push(m)
@@ -398,6 +413,35 @@ KVIN.prototype.unprepare$Map = function unprepare$Map (seen, po, position) {
   return m;
 }
 
+function unprepare$symbol(seen, po)
+{
+  const symbol = Symbol(po.symbol);
+  seen.push(symbol);
+  return symbol;
+}
+
+/* Promise resolutions/rejections are prepared after settling when using marshalAsync, then
+ * synthesized during unmarshal.
+ *
+ * @param {Array}   seen       list of previously-seen values
+ * @param {Object}  po         a prepared object with the 'how' property holding a prepared object which
+ *                             represents the promise outcome
+ * @param {string}  how        the type of outcome, 'resolve' or 'reject'
+ * @param {string}  position   see unprepare()
+ * @returns a settled {Promise}
+ */
+KVIN.prototype.unprepare$Promise = function unprepare$Promise(seen, po, how, position)
+{
+  var pr = {};
+  pr.promise = new Promise((resolve, reject) => {
+    pr.resolve = resolve;
+    pr.reject  = reject;
+  });
+  pr[how](this.unprepare([/* avoid seen memo */], po[how], position + '.' + how));
+  seen.push(pr.promise);
+  return pr.promise;
+}
+
 function unprepare$bigint(arg) {
   return BigInt(arg);
 }
@@ -405,7 +449,7 @@ function unprepare$bigint(arg) {
 function unprepare$number(arg) {
   return parseFloat(arg);
 }
-  
+
 /**
  * arr:[] - Array of primitives of prepared objects
  * lst:N - repeat last element N times
@@ -438,7 +482,7 @@ KVIN.prototype.unprepare$Array = function unprepare$Array (seen, po, position) {
       let island = po.isl[prop]
       let els = Array.isArray(island.arr) ? island.arr : this.unprepare$Array(seen, island.arr, [ position, 'isl', prop ].join('.'))
 
-      if (els.length - 3 <= this.stackLimit || _vm_fun_maxargs) {
+      if (els.length - 3 <= this.stackLimit || this.maxFunArgs) {
         if (els.length && (a.length < island['@'] + els.length)) {
           a.length = island['@'] + els.length
         }
@@ -474,7 +518,8 @@ KVIN.prototype.unprepare$Array = function unprepare$Array (seen, po, position) {
  *  The isl8 (islands) encoding is almost the same, except that it encodes only
  *  sequences of mostly-non-zero sections of the string.
  */
-KVIN.prototype.unprepare$ArrayBuffer8 = function unprepare$ArrayBuffer8 (seen, po, position) {
+KVIN.prototype.unprepare$ArrayBuffer8 = function unprepare$ArrayBuffer8 (seen, po, _position)
+{
   let i8
   let bytes
   let constructor;
@@ -502,7 +547,16 @@ KVIN.prototype.unprepare$ArrayBuffer8 = function unprepare$ArrayBuffer8 (seen, p
       }
     }
   }
-  let o = new constructor(i8.buffer, i8.byteOffset) // eslint-disable-line;
+  let o;
+
+  if (constructor !== globalThis.Buffer)
+    o = new constructor(i8.buffer, i8.byteOffset) // eslint-disable-line;
+  else
+  {
+    /* work around nodejs deprecation warning */
+    o = Buffer.from(i8.buffer, i8.byteOffset);
+  }
+
   seen.push(o)
   return o;
 }
@@ -514,7 +568,8 @@ KVIN.prototype.unprepare$ArrayBuffer8 = function unprepare$ArrayBuffer8 (seen, p
  *  The isl16 (islands) encoding is almost the same, except that it encodes only
  *  sequences of mostly-non-zero sections of the string.
  */
- KVIN.prototype.unprepare$ArrayBuffer16 = function unprepare$ArrayBuffer16 (seen, po, position) {
+KVIN.prototype.unprepare$ArrayBuffer16 = function unprepare$ArrayBuffer16 (seen, po, _position)
+{
   let i16, i8, words
   let bytes
   let constructor;
@@ -576,9 +631,14 @@ KVIN.prototype.isPrimitiveLike = function isPrimitiveLike (o, seen) {
   if (typeof o === 'number')
     return Number.isFinite(o);
 
+  /* Code below here is disabled because the raw: representation does not make the seen: list, which in
+   * turn causes the object graph to be incorrect if the object is use more than once. 
+   */
+  return false;
+
   if (typeof o !== 'object')
     return false;
- 
+
   if (o.constructor === this.standardObjects.Object && Object.keys(o).length === 0)
     return true;
 
@@ -599,7 +659,7 @@ KVIN.prototype.isPrimitiveLike = function isPrimitiveLike (o, seen) {
     if (!o.hasOwnProperty(prop))
       return false;
     if (seen.indexOf(o[prop]) !== -1)
-      return false; 
+      return false;
     if (!this.isPrimitiveLike(o[prop], seen))
       return false;
   }
@@ -608,9 +668,9 @@ KVIN.prototype.isPrimitiveLike = function isPrimitiveLike (o, seen) {
 }
 
 /**
- * Serialize an instance of Error, preserving standard-ish non-enumerable properties 
- */     
-function prepare$Error(o)
+ * Serialize an instance of Error, preserving standard-ish non-enumerable properties
+ */
+KVIN.prototype.prepare$Error = function prepare$Error(seen, o, where)
 {
   let ret = {
     ctr: 'Error',
@@ -618,16 +678,19 @@ function prepare$Error(o)
     arg: o.message
   };
 
-  for (let prop of ['code', 'stack', 'lineNumber', 'fileName'])
+  for (let prop of ['code', 'stack', 'lineNumber', 'fileName', 'columnNumber'])
     if (o.hasOwnProperty(prop))
       ret.ps[prop] = o[prop];
   for (let prop in o)
     if (o.hasOwnProperty(prop))
       ret.ps[prop] = o[prop];
+  if (o.cause)
+    ret.ps.cause = this.prepare(seen, o.cause, where + '.cause');
 
+  seen.push(ret);
   return ret;
 }
-  
+
 /** Take an arbitrary object and turn it into a 'prepared object'.
  *  A prepared object can always be represented with JSON.
  *
@@ -646,6 +709,9 @@ KVIN.prototype.prepare =  function prepare (seen, o, where) {
   if (typeof o === 'bigint') {
     return prepare$bigint(o)
   }
+  if (typeof o === 'symbol')
+    return prepare$symbol(o, seen);
+
   if (this.isPrimitiveLike(o, seen)) {
     if (!Array.isArray(o) || o.length < this.scanArrayThreshold)
       return prepare$primitive(o, where)
@@ -677,46 +743,25 @@ KVIN.prototype.prepare =  function prepare (seen, o, where) {
   if (o.constructor === RegExp) {
     return this.prepare$RegExp(o)
   }
+  if (o.constructor === Set)
+    return this.prepare$Set(seen, o, where);
 
-  if (o instanceof Promise || o instanceof this.standardObjects.Promise) {
-    /**
-     * Let the caller replace the `resolve` property with its marshalled
-     * resolved value.
-     */
-    return { resolve: o };
-  }
+  if (o instanceof Promise || o instanceof this.standardObjects.Promise)
+    return this.prepare$Promise(seen, o, where);
 
   if (o instanceof Error || o instanceof this.standardObjects.Error) {
     /* special-case Error to get non-enumerable properties */
-    return prepare$Error(o);
+    return this.prepare$Error(seen, o, where);
   }
 
   if (typeof o.constructor === 'undefined') {
-    console.warn('KVIN Warning: ' + where + ' is missing .constructor -- skipping')
+    console && console.warn('KVIN Warning: ' + where + ' is missing .constructor -- skipping')
     return prepare$undefined(o)
   }
 
-  ret = { ctr: this.ctors.indexOf(o.constructor), ps: po }
-  if (ret.ctr === -1) {
-    /**
-     * If the constructor is `Object` from another context, the indexOf check
-     * would fail. So if the name of `o`'s constructor matches one of the valid
-     * constructors, use the index from the mapped array to get the proper
-     * constructor index.
-     */
-    const constructorNames = this.ctors.map((ctor) => ctor.name);
-    const ctrIndex = constructorNames.indexOf(o.constructor.name);
-    if (ctrIndex !== -1) {
-      ret.ctr = ctrIndex;
-      /**
-       * Fix the `o`'s constructor to match its constructor in the current
-       * context so that later equality/instanceof checks don't fail.
-       */
-      o.constructor = this.ctors[ctrIndex];
-    } else {
-      ret.ctr = o.constructor.name || this.ctors.indexOf(Object)
-    }
-  }
+  ret = { ctr: this.ctors.indexOf(o.constructor), ps: po };
+  if (ret.ctr === -1)
+    ret.ctr = o.constructor.name || this.ctors.indexOf(this.standardObjects.Object);
 
   if (typeof o === 'function') {
     ret.fnName = o.name
@@ -770,6 +815,9 @@ KVIN.prototype.prepare =  function prepare (seen, o, where) {
       case 'string':
         po[prop] = prepare$primitive(o[prop], where + '.' + prop)
         break
+      case 'symbol':
+        po[prop] = prepare$symbol(o[prop], seen);
+        break;
       case 'undefined':
         po[prop] = prepare$undefined(o[prop])
         break
@@ -955,13 +1003,13 @@ KVIN.prototype.prepare$ArrayBuffer16 = function prepare$ArrayBuffer16 (o) {
   } else {
     /* String looks zero-busy: represent via islands of mostly non-zero (sparse string). */
     // let re = /([^\u0000]+/g
-    let re = /([^\u0000]+(.{0,3}([^\u0000]|$))*)+/g
+    let re = /([^\u0000]+(.{0,3}([^\u0000]|$))*)+/g // eslint-disable-line no-control-regex
     let island
 
     ret.isl16 = []
     ret.len = o.byteLength
     while ((island = re.exec(s))) {
-      ret.isl16.push({0: island[0].replace(/\u0000*$/, ''), '@': island.index})
+      ret.isl16.push({0: island[0].replace(/\u0000*$/, ''), '@': island.index}) // eslint-disable-line no-control-regex
     }
   }
   if ((2 * nWords) !== o.byteLength) {
@@ -990,7 +1038,7 @@ KVIN.prototype.prepare$ArrayBuffer8 = function prepare$ArrayBuffer8 (o) {
   if (ret.ctr === -1)
     ret.ctr = o.constructor.name
 
-  const mss = this.stackLimit || _vm_fun_maxargs - 1;
+  const mss = this.stackLimit || this.maxFunArgs - 1;
   let ui8 = new Uint8Array(o.buffer, o.byteOffset, o.byteLength)
   let segments = []
   let s
@@ -1001,18 +1049,28 @@ KVIN.prototype.prepare$ArrayBuffer8 = function prepare$ArrayBuffer8 (o) {
   s = segments.join('')
 
   let manyZeroes = '\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000'
-  if (s.indexOf(manyZeroes) === -1) {
-    ret.ab8 = s
-  } else {
-    /* String looks zero-busy: represent via islands of mostly non-zero (sparse string). */
-    // let re = /([^\u0000]+/g
-    let re = /([^\u0000]+(.{0,3}([^\u0000]|$))*)+/g
-    let island
+  if (s.indexOf(manyZeroes) === -1)
+    ret.ab8 = s;
+  else
+  {
+    try
+    {
+      /* String looks zero-busy: represent via islands of mostly non-zero (sparse string). */
+      const re = new RegExp(`([^\u0000]+(.{0,3}([^\u0000]|$)){0,${this.maxReRepeat}})+`, 'g');
+      const isl8 = [];
+      let island;
+      while ((island = re.exec(s)))
+        isl8.push({0: island[0].replace(/\u0000*$/, ''), '@': island.index}); // eslint-disable-line no-control-regex
 
-    ret.isl8 = []
-    ret.len = o.byteLength
-    while ((island = re.exec(s))) {
-      ret.isl8.push({0: island[0].replace(/\u0000*$/, ''), '@': island.index})
+      ret.isl8 = isl8;
+      ret.len = o.byteLength;
+    }
+    catch(error)
+    {
+      /* fallback to ab8 encoding if the RegExp exceeds the call stack size */
+      if (error.name !== 'RangeError')
+        throw error;
+      ret.ab8 = s;
     }
   }
 
@@ -1064,7 +1122,40 @@ KVIN.prototype.prepare$ArrayBuffer = function prepare$ArrayBuffer (o) {
 }
 
 KVIN.prototype.prepare$RegExp = function prepare$RegExp (o) {
-  return { ctr: this.ctors.indexOf(o.constructor), arg: o.toString().slice(1, -1) }
+  return {
+    ctr: this.ctors.indexOf(o.constructor),
+    args: [ o.source, o.flags ],
+  };
+}
+
+/**
+ * Prepare a Set. Effectively wraps prepare$Array .
+ *  @param   seen   The current seen list for this marshal - things pointers point to
+ *  @param   set    The set we are preparing
+ *  @param   where  Human description of where we are in the object, for debugging purposes
+ */
+KVIN.prototype.prepare$Set = function prepare$Set (seen, set, where) {
+  const elements = this.prepare$Array(seen, Array.from(set.values()), where);
+  return {
+    set: elements,
+  };
+}
+
+KVIN.prototype.unprepare$Set = function prepare$Set (seen, po, position) {
+  const arr = this.unprepare$Array(seen, po.set, position);
+  return new Set(arr);
+}
+
+KVIN.prototype.prepare$Promise = function prepare$Promise(seen, promise, where)
+{
+  if (!seen.promises)
+    throw new Error(`synchronous invocation cannot marshal Promise ${where}`);
+  const ret = { /* placeholder */ };
+  promise
+    .catch(error => ret.reject  = this.prepare(seen, error, where + '$reject'))
+    .then (value => ret.resolve = this.prepare(seen, value, where + '$resolve'));
+  seen.promises.push(promise);
+  return ret;
 }
 
 KVIN.prototype.prepare$boxedPrimitive = function prepare$boxedPrimitive (o) {
@@ -1084,9 +1175,9 @@ function prepare$number (n) {
 
   return n;
 }
-    
+
 /* Store primitives and sort-of-primitives (like object literals) directly */
-function prepare$primitive (primitive, where) {
+function prepare$primitive (primitive, _where) {
   switch (typeof po) {
     case 'boolean':
     case 'number': /* not all cases, see prepare$number */
@@ -1096,16 +1187,29 @@ function prepare$primitive (primitive, where) {
   return { raw: primitive };
 }
 
-function prepare$undefined (o) {
+function prepare$undefined (_o) {
   return { undefined: true }
+}
+
+function prepare$symbol(o, seen)
+{
+  var i;
+  if ((i = seen.indexOf(o)) !== -1)
+    return { seen: i };
+  else
+  {
+    seen.push(o);
+    return { symbol: o.description };
+  }
 }
 
 /** Prepare a value for serialization
  *  @param      what any (supported) js value
+ *  @param {Array}    __seen     list of objects and functions that were seen during traversal.
  *  @returns    an object which can be serialized with json
  */
-KVIN.prototype.marshal = function serialize$$marshal (what) {
-  return {_serializeVerId: this.serializeVerId, what: this.prepare([], what, 'top')}
+KVIN.prototype.marshal = function serialize$$marshal (what, __seen = []) {
+  return {_serializeVerId: this.serializeVerId, what: this.prepare(__seen, what, 'top')}
 }
 
 /**
@@ -1117,64 +1221,13 @@ KVIN.prototype.marshal = function serialize$$marshal (what) {
  * @returns {Promise<object>} An object which can be serialized with
  * `JSON.stringify`
  */
-KVIN.prototype.marshalAsync = async function serialize$$marshalAsync(value, isRecursing = false) {
-  /**
-   * First, have marshal memoize returned an object graph with any instances of
-   * Promise found during the marshal operation with { resolve: X }, where X is
-   * an instance of Promise.
-   *
-   * If we're recursing, we're traversing a marshaled object and shouldn't
-   * redundantly marshal a nested part of it.
-   */
-  let marshalledObject;
-  if (!isRecursing) {
-    marshalledObject = this.marshal(value);
-  } else {
-    marshalledObject = value;
-  }
+KVIN.prototype.marshalAsync = async function serialize$$marshalAsync(value)
+{
+  const seen = [];
+  seen.promises = [];
 
-  /**
-   * Then, traverse the marshalled object, looking for these Promise memos
-   * (resolve property). await the promise (X above) and replace it in the
-   * marshaled object with the marshaled representation of the resolve value.
-   */
-  for (const key in marshalledObject) {
-    if (!Object.hasOwnProperty.call(marshalledObject, key)) {
-      continue;
-    }
-
-    switch (typeof marshalledObject[key]) {
-      case 'object':
-        if (marshalledObject[key] === null) {
-          continue;
-        }
-
-        if (
-          typeof marshalledObject[key].resolve !== 'undefined' &&
-          marshalledObject[key].resolve instanceof Promise
-        ) {
-          marshalledObject[key].resolve = await this.marshalAsync(
-            await marshalledObject[key].resolve,
-          );
-        }
-
-        /**
-         * Recursively traverse the marshalled object
-         *
-         * Operating on the marshalled object graph means we know for certain we
-         * are working on a directed acyclic graph (DAG); prepares's "seen"
-         * array argument expresses cycles separately.
-         */
-        marshalledObject[key] = await this.marshalAsync(
-          marshalledObject[key],
-          true,
-        );
-        break;
-      default:
-        break;
-    }
-  }
-
+  const marshalledObject = this.marshal(value, seen);
+  await Promise.allSettled(seen.promises);
   return marshalledObject;
 }
 
@@ -1187,12 +1240,7 @@ KVIN.prototype.unmarshal = function serialize$$unmarshal (obj) {
     throw new Error(`Cannot unmarshal type ${typeof obj} or null.`)
   }
   if (!obj.hasOwnProperty('_serializeVerId')) {
-    try {
-      let str = JSON.stringify(obj)
-      throw new Error('Invalid serialization format (' + str.slice(0, 20) + '\u22ef' + str.slice(-20) + ')')
-    } catch (e) {
-      throw new Error('Invalid serialization format')
-    }
+    throw new Error('Invalid serialization format (not KVIN)');
   }
   switch (obj._serializeVerId) {
     case 'v4':
@@ -1200,6 +1248,7 @@ KVIN.prototype.unmarshal = function serialize$$unmarshal (obj) {
     case 'v6':
     case 'v7':
     case 'v8':
+    case 'v9':
       break
     default:
       throw new Error(`Cannot unmarshal ${obj._serializeVerId} objects - please update Kvin`)
@@ -1236,10 +1285,10 @@ KVIN.prototype.deserialize = function deserialize (str) {
   return this.unmarshal(JSON.parse(str))
 }
 
-KVIN.prototype.serializeVerId = 'v8'
-  
+KVIN.prototype.serializeVerId = 'v9';
+
 /* JSON-like interface */
-KVIN.prototype.parse = KVIN.prototype.deserialize;  
+KVIN.prototype.parse = KVIN.prototype.deserialize;
 KVIN.prototype.stringify = KVIN.prototype.serialize;
 KVIN.prototype.stringifyAsync = KVIN.prototype.serializeAsync;
 
